@@ -1,3 +1,5 @@
+<p align="right"><strong>简体中文</strong> | <a href="README_EN.md">English</a></p>
+
 # AiPassport-voice
 
 把 [FoloToy AI Passport](https://github.com/FoloToy/ai-passport) 电子胸牌变成 **Home Assistant Assist 中文语音终端**。
