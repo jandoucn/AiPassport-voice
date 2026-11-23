@@ -19,13 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This license covers the repository except where a directory carries its own
-license. See NOTICE.md for third-party components:
-
-- firmware/components/voice_assistant/*.cpp and *.h are derived from ESPHome
-  and are licensed under GPLv3 (see firmware/components/voice_assistant/LICENSE).
-- firmware/assets/fonts/NotoSansSC-Regular.otf is licensed under the
-  SIL Open Font License 1.1 (see firmware/assets/fonts/OFL.txt).
