@@ -1,0 +1,141 @@
+# Wi-Fi：扫码配网，最多保存 4 个网络（NVS，OTA 不丢失）
+# 入口：首次开机自动打开；按住上键（可同时按下键）5 秒；HA 设备页「添加 Wi-Fi」按钮
+passport_wifi:
+  id: net
+
+wifi:
+  power_save_mode: none
+  # 记住上次连上的路由器节点和信道，开机/唤醒直接连，省掉约 3 秒全信道扫描；连不上自动退回扫描
+  fast_connect: true
+  on_connect:
+    - lambda: set_wifi_ps(id(scr_mode) == 2);
+    - script.execute: refresh_pill
+  on_disconnect:
+    - script.execute: refresh_pill
+  # 热点名在运行时改为 Passport-XXXX（MAC 后 4 位），只在配网时开启，连不上网时不自动打开
+  ap:
+    ssid: "Passport-Setup"
+    ap_timeout: 0s
+
+network:
+  tcp_send_buffer: 16384
+
+captive_portal:
+
+# USB 串口配网（web.esphome.io），作为备用手段
+improv_serial:
+
+sensor:
+  - platform: wifi_signal
+    name: Wi-Fi 信号
+    update_interval: 60s
+
+button:
+  - platform: template
+    name: 添加 Wi-Fi
+    icon: mdi:wifi-plus
+    entity_category: config
+    on_press:
+      - script.execute: open_setup
+
+globals:
+  - id: setup_open
+    type: bool
+    initial_value: "false"
+  - id: setup_step_shown
+    type: int
+    initial_value: "-1"
+
+interval:
+  - interval: 400ms
+    then:
+      - if:
+          condition:
+            lambda: return id(setup_open);
+          then:
+            - script.execute: refresh_setup
+
+script:
+  - id: setup_hold
+    mode: restart
+    then:
+      - delay: 5s
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: btn_up
+              - lambda: return !id(setup_open);
+          then:
+            - lambda: id(vol) = id(vol_prev);
+            - script.execute: apply_volume
+            - script.execute: open_setup
+
+  - id: open_setup
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: return !id(setup_open);
+          then:
+            - script.execute: wake_screen
+            - if:
+                condition: voice_assistant.is_running
+                then:
+                  - voice_assistant.stop:
+            - lambda: |-
+                id(net).start_portal();
+                if (!id(net).portal_active()) return;
+                id(setup_open) = true;
+                id(setup_step_shown) = -1;
+                std::string qr = std::string("WIFI:T:nopass;S:") + id(net).ap_ssid() + ";;";
+                lv_qrcode_update(id(qr_wifi), qr.c_str(), qr.size());
+                lv_label_set_text(id(lbl_setup_ssid), id(net).ap_ssid());
+            - if:
+                condition:
+                  lambda: return id(setup_open);
+                then:
+                  - script.execute: refresh_setup
+                  - lvgl.page.show: setup_page
+
+  - id: close_setup
+    then:
+      - script.stop: setup_done
+      - lambda: |-
+          id(net).stop_portal();
+          id(setup_open) = false;
+          id(idle_sec) = 0;
+      - lvgl.page.show: main_page
+      - if:
+          condition: voice_assistant.connected
+          then:
+            - script.execute: ui_idle
+          else:
+            - script.execute: ui_offline
+
+  - id: setup_done
+    mode: single
+    then:
+      - delay: 2500ms
+      - script.execute: close_setup
+
+  - id: refresh_setup
+    then:
+      - lambda: |-
+          using passport_wifi::PortalStep;
+          const auto step = id(net).portal_step();
+          lv_label_set_text_fmt(id(lbl_setup_saved), "已保存 %u/%u 个网络 ・ OK 退出",
+                                (unsigned) id(net).saved_count(), (unsigned) passport_wifi::kMaxNetworks);
+          if ((int) step == id(setup_step_shown)) return;
+          id(setup_step_shown) = (int) step;
+          const char *text = "等待手机扫码连接…";
+          uint32_t col = ${c_muted};
+          switch (step) {
+            case PortalStep::PhoneJoined: text = "● 手机已连上，请按页面操作"; col = ${c_listen}; break;
+            case PortalStep::Connecting: text = "正在连接 Wi-Fi…"; col = ${c_think}; break;
+            case PortalStep::Success: text = "连接成功"; col = ${c_speak}; break;
+            case PortalStep::Failed: text = "连接失败，请检查密码后重试"; col = ${c_error}; break;
+            default: break;
+          }
+          lv_label_set_text(id(lbl_setup_status), text);
+          lv_obj_set_style_text_color(id(lbl_setup_status), lv_color_hex(col), 0);
+          if (step == PortalStep::Success) id(setup_done).execute();

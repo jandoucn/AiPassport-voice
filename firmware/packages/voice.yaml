@@ -1,0 +1,379 @@
+# 语音：按键、Assist 管线、按住说话/松手即发/打断
+api:
+  actions:
+    # 测试用：模拟松开通话键（配合“开始对话”按钮模拟按住说话）
+    - action: ptt_release
+      then:
+        - if:
+            condition:
+              lambda: return id(ptt_active);
+            then:
+              - lambda: id(va).finish_speaking();
+              - script.execute: sent_chime
+              - globals.set: { id: va_phase, value: "2" }
+              - script.execute: { id: reply_watchdog, secs: 20 }
+              - script.execute: ui_think
+        - globals.set: { id: ptt_active, value: "false" }
+
+globals:
+  - id: vol
+    type: float
+    restore_value: true
+    initial_value: "0.6"
+  - id: vol_prev  # 上/下键按下前的音量，长按进入配网时恢复
+    type: float
+    initial_value: "0.6"
+  - id: vol_prev_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: last_error
+    type: std::string
+    initial_value: '""'
+  - id: va_phase  # 0 空闲，1 聆听，2 思考/回答
+    type: int
+    initial_value: "0"
+  - id: ok_down_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: ptt_active
+    type: bool
+    initial_value: "false"
+  - id: got_reply
+    type: bool
+    initial_value: "false"
+  - id: pending_ok  # OK 已按下，正在等 API 重连
+    type: bool
+    initial_value: "false"
+  - id: suppress_offline  # 已显示「再按一次」，不要被离线页盖掉
+    type: bool
+    initial_value: "false"
+  - id: ui_token
+    type: int
+    initial_value: "0"
+  - id: press_again_token
+    type: int
+    initial_value: "0"
+
+binary_sensor:
+  - platform: template
+    id: btn_up
+    internal: true
+    lambda: return id(btn_adc).state < 0.15;
+    filters:
+      - delayed_on_off: 40ms
+    on_press:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            lambda: return !id(setup_open) && !id(wake_key_hold);
+          then:
+            - lambda: |-
+                if (millis() - id(vol_prev_ms) > 800) id(vol_prev) = id(vol);
+                id(vol_prev_ms) = millis();
+                id(vol) = std::min(1.0f, id(vol) + 0.1f);
+            - script.execute: apply_volume
+            - script.execute: setup_hold
+    on_release:
+      - script.stop: setup_hold
+  - platform: template
+    id: btn_down
+    internal: true
+    lambda: return id(btn_adc).state >= 0.15 && id(btn_adc).state < 0.447;
+    filters:
+      - delayed_on_off: 40ms
+    on_press:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            lambda: return !id(setup_open) && !id(wake_key_hold);
+          then:
+            - lambda: |-
+                if (millis() - id(vol_prev_ms) > 800) id(vol_prev) = id(vol);
+                id(vol_prev_ms) = millis();
+                id(vol) = std::max(0.0f, id(vol) - 0.1f);
+            - script.execute: apply_volume
+  - platform: template
+    id: btn_ok
+    name: 通话键
+    lambda: return id(btn_adc).state >= 0.447 && id(btn_adc).state < 1.9;
+    filters:
+      - delayed_on_off: 40ms
+    on_press:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            lambda: return id(setup_open);
+          then:
+            - script.execute: close_setup
+          else:
+            - if:
+                condition:
+                  lambda: return !id(wake_key_hold);
+                then:
+                  - globals.set: { id: ok_down_ms, value: !lambda return millis(); }
+                  - script.execute: ok_gate
+    on_release:
+      - if:
+          condition:
+            lambda: return id(ptt_active) && millis() - id(ok_down_ms) >= 600;
+          then:
+            - lambda: id(va).finish_speaking();
+            - script.execute: sent_chime
+            - globals.set: { id: va_phase, value: "2" }
+            - script.execute: { id: reply_watchdog, secs: 20 }
+            - script.execute: ui_think
+      - globals.set: { id: ptt_active, value: "false" }
+
+button:
+  - platform: template
+    name: 开始对话
+    icon: mdi:microphone-message
+    on_press:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            lambda: return id(va).get_api_connection() != nullptr && !id(setup_open);
+          then:
+            - script.execute: ok_pressed
+
+voice_assistant:
+  id: va
+  microphone: mic
+  speaker: spk
+  noise_suppression_level: 2
+  auto_gain: 31dBFS
+  volume_multiplier: 1.0
+  on_listening:
+    - script.execute: wake_screen
+    - globals.set: { id: va_phase, value: "1" }
+    - script.stop: reply_watchdog
+    - script.execute: ui_listen
+  on_stt_vad_end:
+    - script.execute: sent_chime
+    - globals.set: { id: va_phase, value: "2" }
+    - script.execute: { id: reply_watchdog, secs: 20 }
+    - script.execute: ui_think
+  on_stt_end:
+    - lambda: |-
+        if (x.empty()) {
+          lv_label_set_text(id(lbl_heard), "");
+          return;
+        }
+        std::string q = std::string("“") + clip_utf8(fit_label(id(lbl_reply), x), 60) + "”";
+        lv_label_set_text(id(lbl_heard), (std::string("你：") + q).c_str());
+        lv_label_set_text(id(lbl_reply), q.c_str());
+    - script.execute: ui_think
+  on_intent_start:
+    - script.execute: ui_think
+  on_tts_start:
+    - globals.set:
+        id: got_reply
+        value: !lambda 'return x.find_first_not_of(" \t\r\n") != std::string::npos;'
+    - lvgl.label.update:
+        id: lbl_reply
+        text: !lambda return clip_utf8(fit_label(id(lbl_reply), x), 300);
+  on_tts_stream_start:
+    - script.execute: wake_screen
+    - script.execute: { id: reply_watchdog, secs: 60 }
+    - script.execute: ui_speak
+  on_end:
+    - wait_until:
+        not:
+          voice_assistant.is_running:
+    - script.stop: reply_watchdog
+    - lambda: id(idle_sec) = 0;
+    - if:
+        condition:
+          lambda: return id(last_error).empty() && id(va_phase) == 2 && !id(got_reply);
+        then:
+          - script.execute:
+              id: ui_no_hear
+              msg: "没听清，请再说一遍"
+          - globals.set: { id: va_phase, value: "0" }
+          - globals.set: { id: ptt_active, value: "false" }
+          - delay: 3s
+          - if:
+              condition:
+                not: voice_assistant.is_running
+              then:
+                - script.execute: ui_idle
+        else:
+          - globals.set: { id: va_phase, value: "0" }
+          - globals.set: { id: ptt_active, value: "false" }
+          - if:
+              condition:
+                lambda: return id(last_error).empty();
+              then:
+                - script.execute: ui_idle
+  on_error:
+    - globals.set:
+        id: last_error
+        value: !lambda return code;
+    - if:
+        condition:
+          lambda: return code == "stt-no-text-recognized";
+        then:
+          - script.execute:
+              id: ui_no_hear
+              msg: "请再说一遍"
+        else:
+          - script.execute:
+              id: ui_error
+              msg: !lambda return clip_utf8(fit_label(id(lbl_reply), message), 90);
+    - delay: 4s
+    - globals.set:
+        id: last_error
+        value: '""'
+    - if:
+        condition:
+          not:
+            voice_assistant.is_running:
+        then:
+          - script.execute: ui_idle
+  on_client_connected:
+    - globals.set: { id: suppress_offline, value: "false" }
+    - script.execute: refresh_pill
+    - script.execute: ui_idle
+    - script.execute: refresh_home_strip
+  on_client_disconnected:
+    - globals.set: { id: va_phase, value: "0" }
+    - globals.set: { id: ptt_active, value: "false" }
+    - script.stop: reply_watchdog
+    - script.execute: refresh_pill
+    - script.execute: offline_grace
+
+script:
+  # 松手后的双音提示，等麦克风停下再播，避免和共用的 I2S 冲突
+  - id: sent_chime
+    mode: restart
+    then:
+      - wait_until:
+          condition:
+            not:
+              microphone.is_capturing: mic
+          timeout: 400ms
+      - delay: 20ms
+      - if:
+          condition:
+            lambda: return id(va_phase) == 2;
+          then:
+            - lambda: play_sent_chime(id(spk));
+
+  - id: listen_now
+    then:
+      - lambda: |-
+          id(ui_token) += 1;
+          set_wifi_ps(false);
+          lv_label_set_text(id(lbl_heard), "");
+      - globals.set: { id: va_phase, value: "1" }
+      - globals.set: { id: got_reply, value: "false" }
+      - script.execute: ui_listen
+      - voice_assistant.start:
+          silence_detection: true
+
+  # 亮屏后 API 可能还在重连。等最多 4 秒；手指还按着就开麦并提示，已经松开就请再按一次。
+  - id: ok_gate
+    mode: restart
+    then:
+      - globals.set: { id: suppress_offline, value: "false" }
+      - script.stop: ui_press_again
+      - lambda: id(ui_token) += 1;
+      - globals.set: { id: pending_ok, value: "false" }
+      - if:
+          condition: voice_assistant.connected
+          then:
+            - script.execute: ok_pressed
+          else:
+            - globals.set: { id: pending_ok, value: "true" }
+            - script.execute: ui_connecting
+            - wait_until:
+                condition:
+                  voice_assistant.connected:
+                timeout: 4s
+            - if:
+                condition: voice_assistant.connected
+                then:
+                  - if:
+                      condition:
+                        binary_sensor.is_on: btn_ok
+                      then:
+                        - lambda: play_sent_chime(id(spk));
+                        - wait_until:
+                            condition:
+                              speaker.is_stopped: spk
+                            timeout: 300ms
+                        - delay: 30ms
+                        - globals.set: { id: pending_ok, value: "false" }
+                        - if:
+                            condition:
+                              and:
+                                - voice_assistant.connected:
+                                - binary_sensor.is_on: btn_ok
+                            then:
+                              - globals.set: { id: ptt_active, value: "true" }
+                              - script.execute: listen_now
+                            else:
+                              - lambda: id(ui_press_again).execute();
+                      else:
+                        - globals.set: { id: pending_ok, value: "false" }
+                        - lambda: id(ui_press_again).execute();
+                else:
+                  - globals.set: { id: pending_ok, value: "false" }
+                  - script.execute: ui_link_fail
+
+  # 闪断不到 2 秒不切离线页。真断开后再显示未连接。
+  - id: offline_grace
+    mode: restart
+    then:
+      - delay: 2s
+      - if:
+          condition:
+            and:
+              - not:
+                  voice_assistant.connected:
+              - lambda: return !id(pending_ok) && !id(suppress_offline) && id(va_phase) == 0;
+          then:
+            - script.execute: ui_offline
+
+  - id: ok_pressed
+    mode: single
+    then:
+      - if:
+          condition:
+            not: voice_assistant.is_running
+          then:
+            - globals.set: { id: ptt_active, value: "true" }
+            - script.execute: listen_now
+          else:
+            - if:
+                condition:
+                  lambda: return id(va_phase) == 1;
+                then:
+                  - globals.set: { id: ptt_active, value: "false" }
+                  - lambda: id(va).finish_speaking();
+                  - script.execute: sent_chime
+                  - globals.set: { id: va_phase, value: "2" }
+                  - script.execute: { id: reply_watchdog, secs: 20 }
+                  - script.execute: ui_think
+                else:
+                  - voice_assistant.stop:
+                  - wait_until:
+                      condition:
+                        and:
+                          - not: voice_assistant.is_running
+                          - speaker.is_stopped: spk
+                      timeout: 1s
+                  - globals.set: { id: ptt_active, value: "true" }
+                  - script.execute: listen_now
+
+  - id: reply_watchdog
+    mode: restart
+    parameters:
+      secs: int
+    then:
+      - delay: !lambda return secs * 1000;
+      - if:
+          condition: voice_assistant.is_running
+          then:
+            - voice_assistant.stop:
+            - script.execute: ui_idle

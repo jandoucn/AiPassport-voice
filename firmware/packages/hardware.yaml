@@ -1,0 +1,115 @@
+# 硬件：引脚与参数来自 FoloToy AI Passport 官方 BSP 的 components/bsp/include/bsp_pins.h
+i2c:
+  id: bus_i2c
+  sda: GPIO10
+  scl: GPIO7
+  frequency: 100kHz
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO3
+    i2s_bclk_pin: GPIO5
+    i2s_mclk_pin: GPIO6
+
+# ES8311 接的是模拟麦克风：use_microphone 在 ESPHome 中表示 PDM 数字麦，必须为 false
+audio_dac:
+  - platform: es8311
+    id: codec
+    i2c_id: bus_i2c
+    address: 0x18
+    bits_per_sample: 16bit
+    sample_rate: 16000
+    use_mclk: true
+    use_microphone: false
+    mic_gain: 24DB
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_bus
+    adc_type: external
+    i2s_din_pin: GPIO4
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: left
+    correct_dc_offset: true
+
+speaker:
+  - platform: i2s_audio
+    id: spk
+    i2s_audio_id: i2s_bus
+    dac_type: external
+    i2s_dout_pin:
+      number: GPIO2
+      ignore_strapping_warning: true
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: mono
+    audio_dac: codec
+    buffer_duration: 800ms
+
+spi:
+  id: bus_spi
+  clk_pin:
+    number: GPIO8
+    ignore_strapping_warning: true
+  mosi_pin:
+    number: GPIO9
+    ignore_strapping_warning: true
+
+display:
+  - platform: mipi_spi
+    id: lcd
+    spi_id: bus_spi
+    model: ST7789V
+    cs_pin: GPIO1
+    dc_pin: GPIO20
+    invert_colors: true
+    color_order: rgb
+    data_rate: 40MHz
+    spi_mode: MODE0
+    dimensions:
+      width: 240
+      height: 320
+    auto_clear_enabled: false
+    update_interval: never
+
+output:
+  - platform: ledc
+    id: bl_out
+    pin: GPIO21
+    frequency: 5000Hz
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: 屏幕背光
+    output: bl_out
+    restore_mode: ALWAYS_ON
+    default_transition_length: 200ms
+
+sensor:
+  # 三键共用 GPIO0 的 ADC 分压：上≈0mV，下≈300mV，OK≈595mV，松开≈3300mV
+  # 上键直接接地，同时按上下键时读数与单按上键相同
+  - platform: adc
+    id: btn_adc
+    pin:
+      number: GPIO0
+      allow_other_uses: true
+    attenuation: 12db
+    update_interval: 20ms
+    internal: true
+    on_value:
+      - lambda: if (id(wake_key_hold) && x > 1.9f) id(wake_key_hold) = false;
+  - platform: cw2017
+    i2c_id: bus_i2c
+    update_interval: 30s
+    battery_level:
+      id: batt_pct
+      name: 电池电量
+      on_value:
+        - script.execute: refresh_batt
+    battery_voltage:
+      id: batt_volt
+      name: 电池电压 V

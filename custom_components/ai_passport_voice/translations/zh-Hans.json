@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AI Passport 语音",
+        "description": "时间、日期和天气由本地直接回答；其他问题交给兜底对话代理（大模型）回答。之后可在集成选项中修改。",
+        "data": {
+          "weather_entity": "天气实体",
+          "fallback_agent": "兜底对话代理（大模型）"
+        },
+        "data_description": {
+          "weather_entity": "用于天气直答的 weather 实体，和风、彩云等均可。留空则自动选择第一个可用的天气实体。",
+          "fallback_agent": "时间、日期和天气以外的问题，转交给这个对话代理回答。"
+        }
+      }
+    },
+    "flow_title": "AI Passport 语音",
+    "abort": {
+      "single_instance_allowed": "只能配置一个 AI Passport 语音集成。",
+      "already_configured": "AI Passport 语音集成已配置。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "AI Passport 语音选项",
+        "data": {
+          "weather_entity": "天气实体",
+          "fallback_agent": "兜底对话代理（大模型）"
+        },
+        "data_description": {
+          "weather_entity": "用于天气直答的 weather 实体，和风、彩云等均可。留空则自动选择第一个可用的天气实体。",
+          "fallback_agent": "时间、日期和天气以外的问题，转交给这个对话代理回答。"
+        },
+        "description": "时间、日期和天气由本地直接回答；其他问题交给兜底对话代理（大模型）回答。"
+      }
+    }
+  }
+}

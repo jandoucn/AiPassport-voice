@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AiPassport-voice",
+        "description": "Time, date and weather are answered locally; other questions go to the fallback conversation agent (LLM). You can change these later in the integration options.",
+        "data": {
+          "weather_entity": "Weather entity",
+          "fallback_agent": "Fallback conversation agent (LLM)"
+        },
+        "data_description": {
+          "weather_entity": "Weather entity used for instant weather answers (any provider). Leave empty to pick the first available one.",
+          "fallback_agent": "Questions other than time, date and weather are forwarded to this agent."
+        }
+      }
+    },
+    "flow_title": "AiPassport-voice",
+    "abort": {
+      "single_instance_allowed": "Only one AiPassport-voice integration can be configured.",
+      "already_configured": "AiPassport-voice is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "AiPassport-voice options",
+        "data": {
+          "weather_entity": "Weather entity",
+          "fallback_agent": "Fallback conversation agent (LLM)"
+        },
+        "data_description": {
+          "weather_entity": "Weather entity used for instant weather answers (any provider). Leave empty to pick the first available one.",
+          "fallback_agent": "Questions other than time, date and weather are forwarded to this agent."
+        },
+        "description": "Time, date and weather are answered locally; other questions go to the fallback conversation agent (LLM)."
+      }
+    }
+  }
+}

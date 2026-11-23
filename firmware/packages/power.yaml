@@ -1,0 +1,70 @@
+# 深度睡眠：息屏后再等 5 分钟，或电量降到 3% 时进入；按任意键唤醒（芯片重启，重连 Wi-Fi 与 HA）
+# 插在电脑上不睡，方便调试；HA 中「允许深度睡眠」可关闭空闲睡眠（低电量保护仍生效）
+# 判断规则见 passport_sleep.h，被按键唤醒时那一下按键只亮屏，不调音量、不开始对话
+deep_sleep:
+  id: deep
+  wakeup_pin:
+    number: GPIO0
+    inverted: true
+    allow_other_uses: true
+
+globals:
+  - id: wake_key_hold
+    type: bool
+    initial_value: "false"
+  # 以下两项仅供测试，不保存，重启即恢复
+  - id: sleep_ignore_usb
+    type: bool
+    initial_value: "false"
+  - id: sleep_wake_secs  # 大于 0 时自动睡眠也带定时唤醒
+    type: int
+    initial_value: "0"
+
+switch:
+  - platform: template
+    id: allow_sleep
+    name: 允许深度睡眠
+    icon: mdi:sleep
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+interval:
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (id(sleep_now).is_running()) return;
+          SleepInputs in;
+          in.idle_sec = id(idle_sec);
+          in.scr_mode = id(scr_mode);
+          in.va_phase = id(va_phase);
+          in.setup_open = id(setup_open);
+          in.usb_host = !id(sleep_ignore_usb) && usb_host_present();
+          in.speaker_playing = id(spk).is_running();
+          in.allow_sleep = id(allow_sleep).state;
+          in.batt_pct = id(batt_pct).state;
+          in.pending_ok = id(pending_ok);
+          in.key_held = !std::isnan(id(btn_adc).state) && id(btn_adc).state < 1.9f;
+          const SleepAction act = sleep_decision(in);
+          if (act == SleepAction::STAY_AWAKE) return;
+          ESP_LOGI("power", "进入深度睡眠：%s", act == SleepAction::SLEEP_LOW_BATTERY ? "低电量" : "空闲");
+          id(sleep_now).execute(id(sleep_wake_secs));
+
+script:
+  - id: sleep_now
+    mode: single
+    parameters:
+      wake_secs: int  # 0 只靠按键唤醒
+    then:
+      - lambda: |-
+          ESP_LOGI("power", "准备睡眠，定时唤醒 %d 秒，电量 %.0f%%", wake_secs, id(batt_pct).state);
+          prepare_deep_sleep_hw();
+      - if:
+          condition:
+            lambda: return wake_secs > 0;
+          then:
+            - deep_sleep.enter:
+                id: deep
+                sleep_duration: !lambda return wake_secs * 1000;
+          else:
+            - deep_sleep.enter: deep

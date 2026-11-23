@@ -1,0 +1,104 @@
+# AI Passport 语音：把 FoloToy AI Passport 胸牌变成 Home Assistant Assist 中文语音终端。
+# 本文件是核心配置，也是 ESPHome Dashboard 接管设备时导入的配置。
+# 预编译固件见 passport-voice.factory.yaml；升级已配对的胸牌见 examples/paired-device.yaml。
+substitutions:
+  name: passport-voice
+  friendly_name: AI Passport 语音
+  # 设备名后加 MAC 后缀，多块胸牌不会重名。升级已配对的胸牌时改为 "false"，沿用原设备名。
+  mac_suffix: "true"
+  # 配套集成提供的天气摘要传感器，待机界面显示天气；没有安装集成时自动隐藏
+  weather_entity: sensor.shi_wai_tian_qi_yu_yu_bao
+  c_bg: "0x0B1219"
+  c_card: "0x121E2B"
+  c_text: "0xF0F6FA"
+  c_muted: "0x7FA0B8"
+  c_dim: "0x5C748A"
+  c_ha_blue: "0x18BCF2"
+  c_listen: "0x38D6FF"
+  c_think: "0xFFAB2E"
+  c_speak: "0x2ED598"
+  c_error: "0xFF5C5C"
+  c_offline: "0x5C6B7A"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: ${mac_suffix}
+  min_version: 2026.10.0
+  includes:
+    - passport_sleep.h
+    - passport_text.h
+    - passport_helpers.h
+  on_boot:
+    priority: -100
+    then:
+      - speaker.volume_set:
+          id: spk
+          volume: !lambda return spk_level(id(vol));
+      - lambda: |-
+          release_deep_sleep_hold();
+          id(wake_key_hold) = current_wake_cause() == WakeCause::KEY;
+          ESP_LOGI("power", "启动原因：%s，USB 主机：%s", wake_cause_text(current_wake_cause()),
+                   usb_host_present() ? "已连接" : "未连接");
+          set_wifi_ps(false);
+          start_speaker_prio_guard();
+          start_dhcp_fast_retry();
+          reply_autoscroll_init(id(lbl_reply));
+      - script.execute: refresh_pill
+      - script.execute: ui_offline
+      # 还没有任何可用的 Wi-Fi：直接显示配网二维码
+      - if:
+          condition:
+            lambda: return !id(net).has_credentials();
+          then:
+            - script.execute: open_setup
+
+# voice_assistant：本地覆盖 ESPHome 组件，支持松手即发、打断丢弃旧回答、重试停止请求（GPLv3）
+# passport_wifi：扫码配网，最多保存 4 个 Wi-Fi
+# cw2017：电量计
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [voice_assistant, passport_wifi, cw2017]
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+    # 缩短深度睡眠唤醒（实测醒来到 HA 约 3.8s → 见下）：
+    # - 先向路由器申请上次的 IP（DHCP INIT-REBOOT），被拒再走完整流程
+    # - 拿到 IP 后不再做固定 1 秒的 ARP 冲突检查（家庭网络由路由器分配地址）
+    # - 引导程序在深度睡眠唤醒时跳过整片固件校验（上电/复位仍完整校验），只打印警告；
+    #   引导程序不随 OTA 更新，需用 USB 写入一次 0x0（不影响 NVS）
+    sdkconfig_options:
+      CONFIG_LWIP_DHCP_RESTORE_LAST_IP: y
+      CONFIG_LWIP_DHCP_DOES_NOT_CHECK_OFFERED_IP: y
+      CONFIG_LWIP_DHCP_DOES_ARP_CHECK: n
+      CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP: y
+      CONFIG_BOOTLOADER_LOG_LEVEL_WARN: y
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: DEBUG
+  logs:
+    sensor: WARN
+    adc: WARN
+    binary_sensor: INFO
+    lvgl: INFO
+
+# 支持动态配对的 Home Assistant 会在接入时下发每台设备独立的 API 密钥。
+api:
+  encryption: {}
+
+ota:
+  - platform: esphome
+
+packages:
+  hardware: !include packages/hardware.yaml
+  ui: !include packages/ui.yaml
+  voice: !include packages/voice.yaml
+  wifi: !include packages/wifi.yaml
+  power: !include packages/power.yaml

@@ -1,0 +1,228 @@
+# 打 tag 发布：推送 v0.2.0 这样的 tag 后，编译固件、发布 GitHub Release、更新网页刷机页。
+# PR 中只编译固件，不发布。
+# tag 去掉 v 后必须与 custom_components/ai_passport_voice/manifest.json 中的 version 一致。
+# 首次使用前需在仓库 Settings → Pages 中把 Source 设为 GitHub Actions。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "firmware/**"
+      - "static/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ESPHOME_VERSION: 2026.10.2
+  FIRMWARE_YAML: firmware/passport-voice.factory.yaml
+  MANIFEST_NAME: passport-voice.manifest.json
+
+jobs:
+  build:
+    name: Build firmware
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::tag ${GITHUB_REF_NAME} 不是有效的发布版本"
+              exit 1
+            fi
+            integration=$(jq -r .version custom_components/ai_passport_voice/manifest.json)
+            if [[ "${integration}" != "${version}" ]]; then
+              echo "::error::tag ${GITHUB_REF_NAME} 与集成 manifest.json 的版本 ${integration} 不一致"
+              exit 1
+            fi
+          else
+            version="dev-${GITHUB_SHA::7}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Set firmware version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^(    version: )dev\b.*/\1\"${VERSION}\"/" "${FIRMWARE_YAML}"
+          grep -q "version: \"${VERSION}\"" "${FIRMWARE_YAML}"
+
+      - name: Build
+        id: build
+        uses: esphome/build-action@ae5408cdbc4f70692bf8e345c4982bca05a93667  # v8.1.0
+        with:
+          yaml-file: ${{ env.FIRMWARE_YAML }}
+          version: ${{ env.ESPHOME_VERSION }}
+          complete-manifest: true
+          release-summary: AiPassport-voice ${{ steps.version.outputs.version }}
+          release-url: ${{ github.ref_type == 'tag' && format('{0}/{1}/releases/tag/{2}', github.server_url, github.repository, github.ref_name) || '' }}
+
+      - name: Collect files
+        env:
+          BUILD_NAME: ${{ steps.build.outputs.name }}
+          BUILD_PROJECT_NAME: ${{ steps.build.outputs.project-name }}
+          BUILD_PROJECT_VERSION: ${{ steps.build.outputs.project-version }}
+          RELEASE_URL: ${{ github.ref_type == 'tag' && format('{0}/{1}/releases/tag/{2}', github.server_url, github.repository, github.ref_name) || '' }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          test "${BUILD_NAME}" = "passport-voice-esp32c3"
+          test "${BUILD_PROJECT_NAME}" = "jandoucn.AiPassport-voice"
+          test "${BUILD_PROJECT_VERSION}" = "${VERSION}"
+
+          manifest="${BUILD_NAME}/manifest.json"
+          jq -e --arg version "${VERSION}" --arg release_url "${RELEASE_URL}" '
+            .name == "jandoucn.AiPassport-voice" and
+            .version == $version and
+            .home_assistant_domain == "esphome" and
+            .new_install_prompt_erase == false and
+            (.builds | length == 1) and
+            .builds[0].chipFamily == "ESP32-C3" and
+            (.builds[0].parts | length == 1) and
+            .builds[0].parts[0].offset == 0 and
+            (.builds[0].parts[0].md5 | test("^[0-9a-f]{32}$")) and
+            (.builds[0].parts[0].sha256 | test("^[0-9a-f]{64}$")) and
+            (.builds[0].ota.md5 | test("^[0-9a-f]{32}$")) and
+            (.builds[0].ota.sha256 | test("^[0-9a-f]{64}$")) and
+            .builds[0].ota.summary == ("AiPassport-voice " + $version) and
+            (if $release_url == "" then
+              (.builds[0].ota | has("release_url") | not)
+            else
+              .builds[0].ota.release_url == $release_url
+            end)
+          ' "${manifest}" >/dev/null
+
+          factory=$(jq -er '.builds[0].parts[0].path' "${manifest}")
+          ota=$(jq -er '.builds[0].ota.path' "${manifest}")
+          test "${factory}" = "${BUILD_NAME}.factory.bin"
+          test "${ota}" = "${BUILD_NAME}.ota.bin"
+
+          for image in "${factory}" "${ota}"; do
+            test "${image}" = "$(basename "${image}")"
+            test -s "${BUILD_NAME}/${image}"
+          done
+
+          test "$(md5sum "${BUILD_NAME}/${factory}" | cut -d' ' -f1)" = "$(jq -r '.builds[0].parts[0].md5' "${manifest}")"
+          test "$(sha256sum "${BUILD_NAME}/${factory}" | cut -d' ' -f1)" = "$(jq -r '.builds[0].parts[0].sha256' "${manifest}")"
+          test "$(md5sum "${BUILD_NAME}/${ota}" | cut -d' ' -f1)" = "$(jq -r '.builds[0].ota.md5' "${manifest}")"
+          test "$(sha256sum "${BUILD_NAME}/${ota}" | cut -d' ' -f1)" = "$(jq -r '.builds[0].ota.sha256' "${manifest}")"
+
+          mkdir -p dist
+          cp "${BUILD_NAME}/${factory}" "${BUILD_NAME}/${ota}" dist/
+          cp "${manifest}" "dist/${MANIFEST_NAME}"
+          cp NOTICE.md "dist/THIRD-PARTY-NOTICES.md"
+          cp firmware/components/voice_assistant/LICENSE "dist/ESPHome-GPLv3-MIT-LICENSE.txt"
+          cp firmware/components/passport_wifi/LICENSE-FoloToy "dist/FoloToy-MIT-LICENSE.txt"
+          cp firmware/assets/fonts/OFL.txt "dist/Noto-Sans-SC-OFL.txt"
+          ls -l dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: firmware
+          path: dist
+
+  release:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download firmware
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: firmware
+          path: dist
+
+      - name: Create release
+        env:
+          ESPHOME_VERSION: ${{ env.ESPHOME_VERSION }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes=$(cat <<EOF
+          ## 固件文件
+
+          - \`passport-voice-esp32c3.factory.bin\`：USB 首次刷写包
+          - \`passport-voice-esp32c3.ota.bin\`：已安装设备的无线升级包
+          - \`${MANIFEST_NAME}\`：网页刷机和 Home Assistant 在线升级清单
+
+          ## 对应源码与许可
+
+          - 本版本完整源码：https://github.com/${GH_REPO}/tree/${TAG}
+          - 本版本源码归档：https://github.com/${GH_REPO}/archive/refs/tags/${TAG}.zip
+          - ESPHome ${ESPHOME_VERSION} 源码：https://github.com/esphome/esphome/tree/${ESPHOME_VERSION}
+          - 第三方声明：https://github.com/${GH_REPO}/blob/${TAG}/NOTICE.md
+
+          Release 附件同时提供 ESPHome、FoloToy 和 Noto Sans SC 的许可证文本。
+          EOF
+          )
+          gh release create "${TAG}" dist/* \
+            --title "${TAG}" --notes "${notes}" --generate-notes --verify-tag
+
+  pages:
+    name: Publish pages
+    if: github.ref_type == 'tag'
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
+
+      - name: Build site
+        uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697  # v1.0.13
+        with:
+          source: ./static
+          destination: ./output
+
+      # jekyll 以 root 运行，生成的目录需要改回当前用户才能写入
+      - name: Fix permissions
+        run: sudo chown -R "$(id -u):$(id -g)" output
+
+      - name: Download firmware
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: firmware
+          path: output/firmware
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: output
+          retention-days: 1
+
+      - name: Deploy pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1

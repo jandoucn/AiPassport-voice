@@ -1,0 +1,654 @@
+# 界面（240×320）：待机大时钟 / 对话图标居中 / 回答文字区放大 / 扫码配网；以及亮屏与省电
+globals:
+  - id: idle_sec
+    type: int
+    initial_value: "0"
+  - id: scr_mode  # 0 正常 100%，1 微亮 18%，2 息屏
+    type: int
+    initial_value: "0"
+  - id: ui_mode  # 0 待机，1 对话，2 回答
+    type: int
+    initial_value: "0"
+  - id: weather_brief
+    type: std::string
+    initial_value: '""'
+  - id: hint_until  # 状态栏临时显示音量的截止时间
+    type: uint32_t
+    initial_value: "0"
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      - script.execute: refresh_home_strip
+    on_time:
+      - seconds: 0
+        then:
+          - script.execute: refresh_home_strip
+
+text_sensor:
+  - platform: homeassistant
+    id: ha_weather
+    entity_id: ${weather_entity}
+    internal: true
+    on_value:
+      - lambda: id(weather_brief) = weather_brief_of(x);
+      - script.execute: refresh_weather
+
+# 空闲 45 秒微亮，120 秒息屏并开启 Wi-Fi 省电；对话和配网时不计时
+interval:
+  - interval: 5s
+    then:
+      - if:
+          condition:
+            lambda: return id(va_phase) == 0 && !id(setup_open);
+          then:
+            - lambda: |-
+                id(idle_sec) += 5;
+                if (id(idle_sec) >= 120 && id(scr_mode) != 2) {
+                  id(scr_mode) = 2;
+                  set_wifi_ps(true);
+                  auto call = id(backlight).turn_off();
+                  call.set_transition_length(400);
+                  call.perform();
+                } else if (id(idle_sec) >= 45 && id(idle_sec) < 120 && id(scr_mode) == 0) {
+                  id(scr_mode) = 1;
+                  auto call = id(backlight).turn_on();
+                  call.set_brightness(0.18f);
+                  call.set_transition_length(500);
+                  call.perform();
+                }
+
+image:
+  - platform: file
+    file: ../assets/images/status_idle.png
+    id: img_idle
+    type: RGB565
+    transparency: alpha_channel
+  - platform: file
+    file: ../assets/images/status_listen.png
+    id: img_listen
+    type: RGB565
+    transparency: alpha_channel
+  - platform: file
+    file: ../assets/images/status_think.png
+    id: img_think
+    type: RGB565
+    transparency: alpha_channel
+  - platform: file
+    file: ../assets/images/status_speak.png
+    id: img_speak
+    type: RGB565
+    transparency: alpha_channel
+  - platform: file
+    file: ../assets/images/status_error.png
+    id: img_error
+    type: RGB565
+    transparency: alpha_channel
+  - platform: file
+    file: ../assets/images/status_offline.png
+    id: img_offline
+    type: RGB565
+    transparency: alpha_channel
+
+font:
+  - file: ../assets/fonts/NotoSansSC-Regular.otf
+    id: f13
+    size: 13
+    bpp: 4
+    glyphs: !include ../assets/fonts/glyphs_gb2312.yaml
+  - file: ../assets/fonts/NotoSansSC-Regular.otf
+    id: f16
+    size: 16
+    bpp: 4
+    glyphs: !include ../assets/fonts/glyphs_gb2312.yaml
+  - file: ../assets/fonts/NotoSansSC-Regular.otf
+    id: f22
+    size: 22
+    bpp: 4
+    glyphs: "按住说话正在聆听思考中回答没清出错了未连接助手请再一次上，成功OK WiF-…"
+  - file: ../assets/fonts/NotoSansSC-Regular.otf
+    id: f56_num
+    size: 56
+    bpp: 4
+    glyphs: "0123456789:-"
+
+lvgl:
+  displays: [lcd]
+  buffer_size: 12.5%
+  default_font: f16
+  log_level: WARN
+  pages:
+    - id: main_page
+      bg_color: ${c_bg}
+      bg_opa: COVER
+      scrollable: false
+      widgets:
+        # 状态栏：待机显示日期，对话时显示时间 + 星期；右侧电量
+        - label:
+            id: lbl_sb_time
+            x: 12
+            y: 6
+            text_font: f13
+            text_color: ${c_text}
+            text: "--:--"
+            hidden: true
+        - label:
+            id: lbl_sb_date
+            x: 12
+            y: 6
+            text_font: f13
+            text_color: ${c_muted}
+            text: ""
+        - label:
+            id: lbl_batt
+            x: 150
+            y: 6
+            width: 54
+            text_align: RIGHT
+            text_font: f13
+            text_color: "0xB8C9D8"
+            text: "--%"
+        - obj:
+            id: batt_box
+            x: 208
+            y: 10
+            width: 20
+            height: 11
+            radius: 3
+            bg_opa: TRANSP
+            border_width: 1
+            border_color: "0x6E879C"
+            pad_all: 1
+            scrollable: false
+            widgets:
+              - obj:
+                  id: batt_fill
+                  x: 0
+                  y: 0
+                  width: 14
+                  height: 7
+                  radius: 1
+                  border_width: 0
+                  bg_color: ${c_speak}
+        - obj:
+            x: 229
+            y: 13
+            width: 2
+            height: 5
+            radius: 1
+            border_width: 0
+            bg_color: "0x6E879C"
+
+        # 待机大时钟 + 天气
+        - label:
+            id: lbl_clock
+            align: TOP_MID
+            y: 26
+            text_font: f56_num
+            text_color: ${c_text}
+            text: "--:--"
+        - label:
+            id: lbl_weather
+            align: TOP_MID
+            y: 98
+            text_font: f13
+            text_color: "0x7FD8F7"
+            text: ""
+            hidden: true
+
+        # 状态图标 + 光晕 + 思考旋转光轨
+        - obj:
+            id: glow_outer
+            align: TOP_MID
+            y: 110
+            width: 124
+            height: 124
+            radius: 62
+            border_width: 0
+            bg_color: ${c_ha_blue}
+            bg_opa: 8%
+            scrollable: false
+        - obj:
+            id: glow_inner
+            align: TOP_MID
+            y: 119
+            width: 106
+            height: 106
+            radius: 53
+            border_width: 0
+            bg_color: ${c_ha_blue}
+            bg_opa: 10%
+            scrollable: false
+        - spinner:
+            id: spin
+            align: TOP_MID
+            y: 123
+            width: 98
+            height: 98
+            spin_time: 1100ms
+            arc_length: 65deg
+            arc_width: 4
+            arc_color: "0x1B2B3B"
+            hidden: true
+            indicator:
+              arc_width: 4
+              arc_color: ${c_think}
+        - image:
+            id: img_status
+            align: TOP_MID
+            y: 128
+            src: img_offline
+
+        # 状态大字与说明
+        - label:
+            id: lbl_state
+            align: TOP_MID
+            y: 222
+            text_font: f22
+            text_color: ${c_offline}
+            text: "正在连接…"
+        - label:
+            id: lbl_sub
+            align: TOP_MID
+            y: 252
+            text_font: f13
+            text_color: ${c_dim}
+            text: ""
+
+        # 待机底部胶囊：音量与连接状态
+        - obj:
+            id: pill
+            align: TOP_MID
+            y: 282
+            width: 160
+            height: 26
+            radius: 13
+            border_width: 0
+            bg_color: ${c_card}
+            pad_all: 0
+            scrollable: false
+            widgets:
+              - label:
+                  id: lbl_pill
+                  align: CENTER
+                  text_font: f13
+                  text_color: ${c_muted}
+                  text: ""
+
+        # 回答模式：你说的话
+        - label:
+            id: lbl_heard
+            x: 12
+            y: 110
+            width: 216
+            long_mode: DOT
+            text_font: f13
+            text_color: ${c_muted}
+            text: ""
+            hidden: true
+
+        # 对话卡片：左侧状态色竖条
+        - obj:
+            id: card
+            x: 12
+            y: 206
+            width: 216
+            height: 102
+            radius: 14
+            border_width: 0
+            bg_color: ${c_card}
+            pad_all: 0
+            scrollable: false
+            hidden: true
+            widgets:
+              - obj:
+                  id: card_bar
+                  x: 0
+                  y: 0
+                  width: 4
+                  height: 174
+                  radius: 0
+                  border_width: 0
+                  bg_color: ${c_listen}
+              - label:
+                  id: lbl_reply
+                  x: 16
+                  y: 10
+                  width: 190
+                  height: 50
+                  long_mode: DOT
+                  text_font: f16
+                  text_color: ${c_text}
+                  text: ""
+              - label:
+                  id: lbl_card_hint
+                  x: 16
+                  y: 62
+                  width: 190
+                  long_mode: WRAP
+                  text_font: f13
+                  text_color: ${c_muted}
+                  text: ""
+
+    # 扫码配网页
+    - id: setup_page
+      bg_color: ${c_bg}
+      bg_opa: COVER
+      scrollable: false
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 10
+            text_font: f22
+            text_color: ${c_text}
+            text: "连接 Wi-Fi"
+        - label:
+            align: TOP_MID
+            y: 42
+            text_font: f13
+            text_color: ${c_muted}
+            text: "手机扫码，连上热点后按提示操作"
+        - obj:
+            align: TOP_MID
+            y: 68
+            width: 136
+            height: 136
+            radius: 14
+            border_width: 0
+            bg_color: "0xFFFFFF"
+            pad_all: 0
+            scrollable: false
+            widgets:
+              - qrcode:
+                  id: qr_wifi
+                  align: CENTER
+                  size: 116
+                  dark_color: "0x0B0D12"
+                  light_color: "0xFFFFFF"
+                  text: "WIFI:T:nopass;S:Passport;;"
+        - label:
+            id: lbl_setup_ssid
+            align: TOP_MID
+            y: 212
+            text_font: f16
+            text_color: ${c_ha_blue}
+            text: ""
+        - obj:
+            align: TOP_MID
+            y: 242
+            width: 216
+            height: 28
+            radius: 14
+            border_width: 0
+            bg_color: "0x122232"
+            pad_all: 0
+            scrollable: false
+            widgets:
+              - label:
+                  id: lbl_setup_status
+                  align: CENTER
+                  text_font: f13
+                  text_color: ${c_muted}
+                  text: ""
+        - label:
+            id: lbl_setup_saved
+            align: TOP_MID
+            y: 286
+            text_font: f13
+            text_color: ${c_dim}
+            text: ""
+
+script:
+  - id: wake_screen
+    mode: restart
+    then:
+      - lambda: |-
+          id(idle_sec) = 0;
+          set_wifi_ps(false);
+          if (id(scr_mode) != 0) {
+            id(scr_mode) = 0;
+            auto call = id(backlight).turn_on();
+            call.set_brightness(1.0f);
+            call.set_transition_length(120);
+            call.perform();
+          }
+
+  - id: refresh_batt
+    then:
+      - lambda: |-
+          if (std::isnan(id(batt_pct).state)) return;
+          const int soc = (int) id(batt_pct).state;
+          lv_label_set_text_fmt(id(lbl_batt), "%d%%", soc);
+          lv_obj_set_width(id(batt_fill), std::max(2, (soc * 16) / 100));
+          const uint32_t col = (soc <= 15) ? ${c_error} : (soc <= 30) ? ${c_think} : ${c_speak};
+          lv_obj_set_style_bg_color(id(batt_fill), lv_color_hex(col), 0);
+
+  - id: refresh_home_strip
+    then:
+      - lambda: |-
+          auto now = id(ha_time).now();
+          if (!now.is_valid()) return;
+          static const char *const WEEKDAYS[7] = {
+            "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"
+          };
+          const char *wd = WEEKDAYS[now.day_of_week - 1];
+          lv_label_set_text_fmt(id(lbl_clock), "%02d:%02d", now.hour, now.minute);
+          lv_label_set_text_fmt(id(lbl_sb_time), "%02d:%02d", now.hour, now.minute);
+          if (millis() < id(hint_until)) return;
+          if (id(ui_mode) == 0)
+            lv_label_set_text_fmt(id(lbl_sb_date), "%d月%d日 %s", now.month, now.day_of_month, wd);
+          else
+            lv_label_set_text(id(lbl_sb_date), wd);
+
+  - id: refresh_weather
+    then:
+      - lambda: |-
+          lv_label_set_text(id(lbl_weather), fit_label(id(lbl_weather), id(weather_brief)).c_str());
+          if (id(ui_mode) == 0 && !id(weather_brief).empty())
+            lv_obj_clear_flag(id(lbl_weather), LV_OBJ_FLAG_HIDDEN);
+          else
+            lv_obj_add_flag(id(lbl_weather), LV_OBJ_FLAG_HIDDEN);
+
+  - id: refresh_pill
+    then:
+      - lambda: |-
+          const char *link = id(va).get_api_connection() != nullptr ? "已连接"
+                             : wifi::global_wifi_component->is_connected() ? "等待助手"
+                                                                          : "未联网";
+          lv_label_set_text_fmt(id(lbl_pill), "音量 %d%% ・ %s", (int) roundf(id(vol) * 100), link);
+
+  # 待机时音量显示在底部胶囊里，对话中临时显示在状态栏
+  - id: apply_volume
+    mode: restart
+    then:
+      - speaker.volume_set:
+          id: spk
+          volume: !lambda return spk_level(id(vol));
+      - script.execute: refresh_pill
+      - lambda: |-
+          if (id(ui_mode) != 0) {
+            id(hint_until) = millis() + 2000;
+            lv_label_set_text_fmt(id(lbl_sb_date), "音量 %d%%", (int) roundf(id(vol) * 100));
+          }
+      - delay: 2s
+      - script.execute: refresh_home_strip
+
+  # 切换布局。mode：0 待机，1 对话，2 回答；color：状态色
+  - id: ui_layout
+    parameters:
+      mode: int
+      color: int
+    then:
+      - lambda: |-
+          auto show = [](lv_obj_t *o, bool on) {
+            if (on) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+          };
+          const bool idle = mode == 0, focus = mode == 1, reply = mode == 2;
+          const lv_color_t c = lv_color_hex(color);
+          id(ui_mode) = mode;
+
+          show(id(lbl_clock), idle);
+          show(id(pill), idle);
+          show(id(lbl_sb_time), !idle);
+          lv_obj_set_x(id(lbl_sb_date), idle ? 12 : 54);
+
+          // 图标位置：待机偏下、对话居中、回答缩小到左上角
+          const int my = idle ? 128 : 49;
+          if (reply) {
+            lv_image_set_scale(id(img_status), 164);
+            lv_obj_align(id(img_status), LV_ALIGN_TOP_LEFT, -4, 18);
+          } else {
+            lv_image_set_scale(id(img_status), LV_SCALE_NONE);
+            lv_obj_align(id(img_status), LV_ALIGN_TOP_MID, 0, my);
+          }
+          show(id(glow_outer), !reply);
+          show(id(glow_inner), !reply);
+          lv_obj_align(id(glow_outer), LV_ALIGN_TOP_MID, 0, my - 18);
+          lv_obj_align(id(glow_inner), LV_ALIGN_TOP_MID, 0, my - 9);
+          lv_obj_align(id(spin), LV_ALIGN_TOP_MID, 0, my - 5);
+          lv_obj_set_style_bg_color(id(glow_outer), c, 0);
+          lv_obj_set_style_bg_color(id(glow_inner), c, 0);
+
+          // 状态文字
+          lv_obj_set_style_text_color(id(lbl_state), c, 0);
+          if (reply) {
+            lv_obj_align(id(lbl_state), LV_ALIGN_TOP_LEFT, 88, 40);
+            lv_obj_align(id(lbl_sub), LV_ALIGN_TOP_LEFT, 88, 70);
+          } else {
+            lv_obj_align(id(lbl_state), LV_ALIGN_TOP_MID, 0, idle ? 222 : 160);
+            lv_obj_align(id(lbl_sub), LV_ALIGN_TOP_MID, 0, 252);
+          }
+          show(id(lbl_sub), !focus);
+
+          // 对话卡片
+          show(id(card), !idle);
+          show(id(lbl_heard), reply);
+          show(id(lbl_card_hint), focus);
+          lv_obj_set_style_bg_color(id(card_bar), c, 0);
+          lv_obj_set_y(id(card), reply ? 134 : 206);
+          lv_obj_set_height(id(card), reply ? 174 : 102);
+          reply_set_visible(id(lbl_reply), reply ? 154 : 50);
+      - script.execute: refresh_home_strip
+      - script.execute: refresh_weather
+
+  - id: ui_idle
+    then:
+      - if:
+          condition:
+            and:
+              - voice_assistant.connected:
+              - lambda: return !id(pending_ok) && !id(suppress_offline) && id(va_phase) == 0;
+          then:
+            - lvgl.image.update: { id: img_status, src: img_idle }
+            - script.execute: { id: ui_layout, mode: 0, color: "${c_ha_blue}" }
+            - lambda: |-
+                lv_label_set_text(id(lbl_state), "按住 OK 说话");
+                lv_label_set_text(id(lbl_sub), "轻点也可以，说完自动发送");
+                lv_obj_add_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+
+  - id: ui_offline
+    then:
+      - lvgl.image.update: { id: img_status, src: img_offline }
+      - script.execute: { id: ui_layout, mode: 0, color: "${c_offline}" }
+      - lambda: |-
+          const bool online = wifi::global_wifi_component->is_connected();
+          lv_label_set_text(id(lbl_state), "未连接助手");
+          lv_label_set_text(id(lbl_sub), online ? "请在 HA 中添加此设备" : "Wi-Fi 未连接，按住上键 5 秒配网");
+          lv_obj_add_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+
+  - id: ui_listen
+    then:
+      - lvgl.image.update: { id: img_status, src: img_listen }
+      - script.execute: { id: ui_layout, mode: 1, color: "${c_listen}" }
+      - lambda: |-
+          lv_label_set_text(id(lbl_state), "正在聆听…");
+          lv_label_set_text(id(lbl_reply), "请说话…");
+          lv_label_set_text(id(lbl_card_hint), "松开 OK 立即发送，轻点则说完自动发送");
+          lv_obj_add_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+
+  - id: ui_think
+    then:
+      - lvgl.image.update: { id: img_status, src: img_think }
+      - script.execute: { id: ui_layout, mode: 1, color: "${c_think}" }
+      - lambda: |-
+          lv_label_set_text(id(lbl_state), "思考中…");
+          lv_label_set_text(id(lbl_card_hint), "");
+          lv_obj_clear_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+
+  - id: ui_speak
+    then:
+      - lvgl.image.update: { id: img_status, src: img_speak }
+      - script.execute: { id: ui_layout, mode: 2, color: "${c_speak}" }
+      - lambda: |-
+          lv_label_set_text(id(lbl_state), "回答中");
+          lv_label_set_text(id(lbl_sub), "按 OK 打断");
+          lv_obj_add_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+
+  - id: ui_no_hear
+    parameters:
+      msg: string
+    then:
+      - lvgl.image.update: { id: img_status, src: img_think }
+      - script.execute: { id: ui_layout, mode: 1, color: "${c_think}" }
+      - lambda: |-
+          lv_label_set_text(id(lbl_state), "没听清");
+          lv_label_set_text(id(lbl_reply), msg.c_str());
+          lv_label_set_text(id(lbl_card_hint), "按 OK 重新说");
+          lv_obj_add_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+
+  - id: ui_error
+    parameters:
+      msg: string
+    then:
+      - lvgl.image.update: { id: img_status, src: img_error }
+      - script.execute: { id: ui_layout, mode: 1, color: "${c_error}" }
+      - lambda: |-
+          lv_label_set_text(id(lbl_state), "出错了");
+          lv_label_set_text(id(lbl_reply), msg.c_str());
+          lv_label_set_text(id(lbl_card_hint), "");
+          lv_obj_add_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+
+  - id: ui_connecting
+    then:
+      - lvgl.image.update: { id: img_status, src: img_think }
+      - script.execute: { id: ui_layout, mode: 1, color: "${c_think}" }
+      - lambda: |-
+          lv_label_set_text(id(lbl_state), "正在连接…");
+          lv_label_set_text(id(lbl_reply), "");
+          lv_label_set_text(id(lbl_card_hint), "按住不放，连上后直接开始聆听");
+          lv_obj_clear_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+
+  - id: ui_press_again
+    mode: restart
+    then:
+      - globals.set: { id: suppress_offline, value: "true" }
+      - lambda: |-
+          id(ui_token) += 1;
+          id(press_again_token) = id(ui_token);
+      - lvgl.image.update: { id: img_status, src: img_idle }
+      - script.execute: { id: ui_layout, mode: 0, color: "${c_ha_blue}" }
+      - lambda: |-
+          lv_label_set_text(id(lbl_state), "请再按一次");
+          lv_label_set_text(id(lbl_sub), "助手已连上");
+          lv_obj_add_flag(id(spin), LV_OBJ_FLAG_HIDDEN);
+      - delay: 3s
+      - if:
+          condition:
+            and:
+              - voice_assistant.connected:
+              - lambda: return id(ui_token) == id(press_again_token) && id(va_phase) == 0;
+          then:
+            - globals.set: { id: suppress_offline, value: "false" }
+            - script.execute: ui_idle
+
+  - id: ui_link_fail
+    then:
+      - globals.set: { id: suppress_offline, value: "true" }
+      - lvgl.image.update: { id: img_status, src: img_offline }
+      - script.execute: { id: ui_layout, mode: 0, color: "${c_offline}" }
+      - lambda: |-
+          lv_label_set_text(id(lbl_state), "助手没连上");
+          lv_label_set_text(id(lbl_sub), "请稍后再按一次 OK");
+          lv_obj_add_flag(id(spin), LV_OBJ_FLAG_HIDDEN);

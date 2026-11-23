@@ -1,0 +1,24 @@
+# 升级已经接入 Home Assistant 的胸牌，沿用原设备名、API 密钥和 Wi-Fi，HA 配对不受影响。
+# 用法：复制为 firmware/passport-voice.local.yaml（已被 .gitignore 忽略），
+#       在 firmware/secrets.yaml 中填写下面用到的键，然后：
+#       esphome run passport-voice.local.yaml --device <原设备地址>
+substitutions:
+  mac_suffix: "false"
+
+packages:
+  core: !include passport-voice.yaml
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    encryption:
+      key: !secret api_encryption_key
+
+# 写在这里的网络作为内置网络；扫码配网保存的网络会追加在后面
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password

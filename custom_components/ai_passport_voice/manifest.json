@@ -1,0 +1,15 @@
+{
+  "domain": "ai_passport_voice",
+  "name": "AI Passport 语音",
+  "codeowners": [
+    "@jandoucn"
+  ],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "documentation": "https://github.com/jandoucn/AiPassport-voice",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/jandoucn/AiPassport-voice/issues",
+  "requirements": [],
+  "version": "0.2.0"
+}

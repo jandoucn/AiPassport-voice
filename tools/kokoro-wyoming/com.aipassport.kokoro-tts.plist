@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 把 /path/to/kokoro-wyoming 替换为实际目录后，复制到 ~/Library/LaunchAgents/ -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.aipassport.kokoro-tts</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/kokoro-wyoming/.venv/bin/python</string>
+    <string>/path/to/kokoro-wyoming/kokoro_wyoming.py</string>
+    <string>--uri</string><string>tcp://0.0.0.0:10210</string>
+    <string>--voice</string><string>zf_xiaoxiao</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/kokoro-wyoming</string>
+  <key>EnvironmentVariables</key><dict><key>HF_HUB_OFFLINE</key><string>1</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/path/to/kokoro-wyoming/kokoro.log</string>
+  <key>StandardErrorPath</key><string>/path/to/kokoro-wyoming/kokoro.log</string>
+</dict>
+</plist>

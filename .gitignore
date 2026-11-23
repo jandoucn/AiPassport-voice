@@ -1,0 +1,21 @@
+secrets.yaml
+.esphome/
+.DS_Store
+__pycache__/
+*.pyc
+build/
+
+# 本机覆盖配置（已配对设备的密钥、内置 Wi-Fi 等）
+*.local.yaml
+
+# 测试只保留在本地
+tests/
+.pytest_cache/
+pytest.ini
+
+# 本地文稿与草图
+docs/公众号投稿-*.md
+docs/公众号投稿-*.html
+docs/公众号投稿-*.pdf
+docs/胸牌*.png
+.spec-workflow/

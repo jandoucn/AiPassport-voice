@@ -1,0 +1,27 @@
+# 预编译固件：由 GitHub Actions 编译发布，网页一键刷机使用。
+# 在核心配置之上增加：项目版本、Dashboard 接管、从 GitHub Releases 无线升级。
+# 仓库地址确定后修改下面两个替换值。
+substitutions:
+  github_repo: jandoucn/AiPassport-voice
+  pages_url: https://jandoucn.github.io/AiPassport-voice
+
+packages:
+  core: !include passport-voice.yaml
+
+esphome:
+  project:
+    name: jandoucn.AiPassport-voice
+    version: dev  # 发布时由 GitHub Actions 替换为版本号
+
+dashboard_import:
+  package_import_url: github://${github_repo}/firmware/passport-voice.yaml@main
+
+http_request:
+
+ota:
+  - platform: http_request
+
+update:
+  - platform: http_request
+    name: 固件
+    source: ${pages_url}/firmware/passport-voice.manifest.json
